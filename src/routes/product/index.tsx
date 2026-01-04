@@ -1,295 +1,262 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
-import { z } from 'zod'
-import * as React from 'react'
+import * as React from "react";
+import { z } from "zod";
+
+import { createFileRoute } from "@tanstack/react-router";
+import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+
 import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-} from '@tanstack/react-table'
-import {
+  productKeys,
   useProducts,
   useCreateProduct,
   useUpdateProduct,
   useDeleteProduct,
-} from '../../data/products.queries'
-import type { Product } from '../../api/product.api'
+} from "@/data/products.queries";
 
-const productSearchSchema = z.object({ q: z.string().optional() })
+import { queryClient } from "@/lib/queryClient";
+import { listProducts } from "@/api/product.fn";
 
-export const Route = createFileRoute('/product/')({
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { MutationError } from "@/components/common/MutationError";
+import {Spinner} from "@/components/ui/spinner";
+import {
+  productFormSchema,
+  EMPTY_FORM,
+  type ProductForm,
+} from "@/data/products/product.schema";
+import { ProductDrawer } from "@/components/product/ProductDrawer";
+import { ProductTable } from "@/components/product/ProductTable";
+import { useProductColumns } from "@/components/product/ProductTableColumns";
+import type { Product } from "@/api/product.api";
+
+const productSearchSchema = z.object({ q: z.string().optional() });
+
+export const Route = createFileRoute("/product/")({
   validateSearch: productSearchSchema,
+  loader: async () => {
+    await queryClient.ensureQueryData({
+      queryKey: productKeys.list(),
+      queryFn: () => listProducts(),
+    });
+  },
   component: ProductList,
-})
+});
 
-const columnHelper = createColumnHelper<Product>()
+type FormErrors = Partial<Record<keyof ProductForm, string>>;
 
 function ProductList() {
-  const search = Route.useSearch()
-  const navigate = Route.useNavigate()
+  const search = Route.useSearch();
+  const navigate = Route.useNavigate();
 
-  const { data: products = [], isLoading } = useProducts()
-  const createMut = useCreateProduct()
-  const updateMut = useUpdateProduct()
-  const deleteMut = useDeleteProduct()
+  const { data: products = [], isLoading, isError, error } = useProducts();
+  const createMut = useCreateProduct();
+  const updateMut = useUpdateProduct();
+  const deleteMut = useDeleteProduct();
 
-  const q = (search.q ?? '').toLowerCase().trim()
-  const filtered = q ? products.filter((p) => p.name.toLowerCase().includes(q)) : products
+  // Sheet state
+  const [open, setOpen] = React.useState(false);
+  const [mode, setMode] = React.useState<"create" | "edit">("create");
+  const [editing, setEditing] = React.useState<Product | null>(null);
+  const [form, setForm] = React.useState<ProductForm>(EMPTY_FORM);
+  const [formErrors, setFormErrors] = React.useState<FormErrors>({});
+  const [uiTableLoading, setUiTableLoading] = React.useState(false);
+  React.useEffect(() => {
+  const t = window.setTimeout(() => setUiTableLoading(false), 2000);
+  return () => window.clearTimeout(t);
+}, []);
+  const openCreate = React.useCallback(() => {
+    setMode("create");
+    setEditing(null);
+    setFormErrors({});
+    setForm({
+      name: "",
+      price: 0,
+      imageUrl: "https://picsum.photos/seed/new/300/180",
+    });
+    setOpen(true);
+  }, []);
 
-  const [form, setForm] = React.useState({ name: '', price: 0, imageUrl: '' })
-  const [editingId, setEditingId] = React.useState<string | null>(null)
-  const [edit, setEdit] = React.useState({ name: '', price: 0, imageUrl: '' })
+  const openEdit = React.useCallback((p: Product) => {
+    setMode("edit");
+    setEditing(p);
+    setFormErrors({});
+    setForm({
+      name: p.name,
+      price: p.price,
+      imageUrl: p.imageUrl,
+    });
+    setOpen(true);
+  }, []);
 
-  const columns = React.useMemo<ColumnDef<Product, unknown>[]>(() => {
-    return [
-      columnHelper.display({
-        id: 'image',
-        header: 'Image',
-        cell: ({ row }) => {
-          const p = row.original
-          const isEditing = editingId === p.id
-          return (
-            <img
-              src={isEditing ? edit.imageUrl || p.imageUrl : p.imageUrl}
-              alt={p.name}
-              width={72}
-              height={40}
-              loading="lazy"
-              style={{ objectFit: 'cover', borderRadius: 4 }}
-            />
-          )
-        },
-      }),
-      columnHelper.accessor('name', {
-        header: 'Name',
-        cell: ({ row, getValue }) => {
-          const p = row.original
-          const isEditing = editingId === p.id
+  const closeSheet = React.useCallback(() => {
+    setOpen(false);
+  }, []);
 
-          if (isEditing) {
-            return (
-              <input
-                value={edit.name}
-                onChange={(e) => setEdit((s) => ({ ...s, name: e.target.value }))}
-              />
-            )
+  const onSubmit = React.useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+
+      setFormErrors({});
+      const parsed = productFormSchema.safeParse(form);
+
+      if (!parsed.success) {
+        const fe = parsed.error.flatten().fieldErrors;
+        setFormErrors({
+          name: fe.name?.[0],
+          price: fe.price?.[0],
+          imageUrl: fe.imageUrl?.[0],
+        });
+        return;
+      }
+
+      const values = parsed.data;
+
+      if (mode === "create") {
+        createMut.mutate(
+          {
+            name: values.name,
+            price: values.price || 0,
+            imageUrl:
+              values.imageUrl || "https://picsum.photos/seed/new/300/180",
+          },
+          {
+            onSuccess: () => {
+              closeSheet();
+              setForm(EMPTY_FORM);
+              setFormErrors({});
+            },
           }
+        );
+        return;
+      }
 
-          return (
-            <Link to="/product/$id" params={{ id: p.id }}>
-              {getValue()}
-            </Link>
-          )
+      if (!editing) return;
+      updateMut.mutate(
+        {
+          id: editing.id,
+          patch: {
+            name: values.name,
+            price: values.price || 0,
+            imageUrl: values.imageUrl || editing.imageUrl,
+          },
         },
-      }),
-      columnHelper.accessor('price', {
-        header: 'Price',
-        cell: ({ row, getValue }) => {
-          const p = row.original
-          const isEditing = editingId === p.id
+        {
+          onSuccess: () => {
+            closeSheet();
+            setEditing(null);
+            setForm(EMPTY_FORM);
+            setFormErrors({});
+          },
+        }
+      );
+    },
+    [closeSheet, createMut, editing, form, mode, updateMut]
+  );
 
-          if (isEditing) {
-            return (
-              <input
-                type="number"
-                value={edit.price}
-                onChange={(e) => setEdit((s) => ({ ...s, price: Number(e.target.value) }))}
-                style={{ width: 120 }}
-              />
-            )
-          }
+  // search
+  const q = (search.q ?? "").toLowerCase().trim();
+  const filtered = q
+    ? products.filter((p) => p.name.toLowerCase().includes(q))
+    : products;
 
-          const value = getValue()
-          return `$${value.toFixed(2)}`
-        },
-      }),
-      columnHelper.accessor('likes', {
-        header: 'Likes',
-        cell: ({ getValue }) => getValue(),
-      }),
-      columnHelper.accessor('imageUrl', {
-        header: 'Image URL',
-        cell: ({ row, getValue }) => {
-          const p = row.original
-          const isEditing = editingId === p.id
-
-          if (isEditing) {
-            return (
-              <input
-                value={edit.imageUrl}
-                onChange={(e) => setEdit((s) => ({ ...s, imageUrl: e.target.value }))}
-                style={{ minWidth: 260 }}
-              />
-            )
-          }
-
-          const url = getValue()
-          return (
-            <a href={url} target="_blank" rel="noreferrer">
-              {url}
-            </a>
-          )
-        },
-      }),
-      columnHelper.display({
-        id: 'actions',
-        header: 'Actions',
-        cell: ({ row }) => {
-          const p = row.original
-          const isEditing = editingId === p.id
-
-          if (!isEditing) {
-            return (
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingId(p.id)
-                    setEdit({ name: p.name, price: p.price, imageUrl: p.imageUrl })
-                  }}
-                >
-                  Edit
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!window.confirm('Delete this product?')) return
-                    deleteMut.mutate(p.id)
-                  }}
-                  disabled={deleteMut.isPending}
-                >
-                  Delete
-                </button>
-              </div>
-            )
-          }
-
-          return (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  updateMut.mutate({
-                    id: p.id,
-                    patch: {
-                      name: edit.name.trim() || 'Untitled',
-                      price: Number(edit.price) || 0,
-                      imageUrl: edit.imageUrl.trim() || p.imageUrl,
-                    },
-                  })
-                  setEditingId(null)
-                }}
-                disabled={updateMut.isPending}
-              >
-                Save
-              </button>
-
-              <button type="button" onClick={() => setEditingId(null)}>
-                Cancel
-              </button>
-            </div>
-          )
-        },
-      }),
-    ]
-  }, [deleteMut, edit.imageUrl, edit.name, edit.price, editingId, updateMut])
+  // columns (tách file)
+  const columns = useProductColumns({
+    onEdit: openEdit,
+    onDelete: (id) => deleteMut.mutate({ id }),
+    deletePending: deleteMut.isPending,
+  });
 
   const table = useReactTable({
     data: filtered,
     columns,
     getCoreRowModel: getCoreRowModel(),
-  })
+  });
 
-  if (isLoading) return <div style={{ padding: 16 }}>Loading...</div>
+  {uiTableLoading || isLoading ? (
+    <div className="mt-4 rounded-md border">
+      <div className="flex h-56 items-center justify-center">
+        <Spinner className="h-10 w-10 text-muted-foreground" />
+      </div>
+    </div>
+  ) : (
+    <ProductTable table={table} />
+  )}
+
+  if (isError) {
+    return (
+      <div style={{ padding: 16, color: "red" }}>
+        Failed to load products: {(error as Error).message}
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: 16 }}>
-      <h1>Product List</h1>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <h1 style={{ margin: 0 }}>Product List</h1>
+        <Button
+          type="button"
+          onClick={openCreate}
+          disabled={createMut.isPending}
+        >
+          Add Product
+        </Button>
+      </div>
 
-      <input
+      <Input
         placeholder="Search by name... (q)"
-        value={search.q ?? ''}
+        value={search.q ?? ""}
         onChange={(e) =>
           navigate({
             search: (prev) => ({ ...prev, q: e.target.value }),
             replace: true,
           })
         }
+        className="max-w-sm"
       />
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          const name = form.name.trim()
-          if (!name) return
-          createMut.mutate({
-            name,
-            price: Number(form.price) || 0,
-            imageUrl: form.imageUrl.trim() || 'https://picsum.photos/seed/new/300/180',
-          })
-          setForm({ name: '', price: 0, imageUrl: '' })
-        }}
-        style={{ marginTop: 12, marginBottom: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}
-      >
-        <input
-          placeholder="Name"
-          value={form.name}
-          onChange={(e) => setForm((s) => ({ ...s, name: e.target.value }))}
-        />
-        <input
-          type="number"
-          placeholder="Price"
-          value={form.price}
-          onChange={(e) => setForm((s) => ({ ...s, price: Number(e.target.value) }))}
-          style={{ width: 120 }}
-        />
-        <input
-          placeholder="Image URL"
-          value={form.imageUrl}
-          onChange={(e) => setForm((s) => ({ ...s, imageUrl: e.target.value }))}
-          style={{ minWidth: 260 }}
-        />
-        <button type="submit" disabled={createMut.isPending}>
-          {createMut.isPending ? 'Adding...' : 'Add'}
-        </button>
-      </form>
+      <MutationError
+        show={createMut.isError}
+        message="Failed to create product"
+      />
+      <MutationError
+        show={updateMut.isError}
+        message="Failed to update product"
+      />
+      <MutationError
+        show={deleteMut.isError}
+        message="Failed to delete product"
+      />
 
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid' }}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-
-          <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} style={{ padding: 8, borderBottom: '1px solid' }}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ProductTable table={table} />
 
       {filtered.length === 0 && <p>No products found.</p>}
+
+      <ProductDrawer
+        open={open}
+        mode={mode}
+        form={form}
+        setForm={setForm}
+        formErrors={formErrors}
+        onSubmit={onSubmit}
+        onCancel={closeSheet}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (!v) {
+            setEditing(null);
+            setForm(EMPTY_FORM);
+            setFormErrors({});
+          }
+        }}
+        isSubmitting={createMut.isPending || updateMut.isPending}
+      />
     </div>
-  )
+  );
 }
