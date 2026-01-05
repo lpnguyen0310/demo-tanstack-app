@@ -2,7 +2,11 @@ import * as React from "react";
 import { z } from "zod";
 
 import { createFileRoute } from "@tanstack/react-router";
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import {
+  getCoreRowModel,
+  getPaginationRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
 
 import {
   productKeys,
@@ -18,21 +22,24 @@ import { listProducts } from "@/api/product.fn";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { MutationError } from "@/components/common/MutationError";
-import {Spinner} from "@/components/ui/spinner";
+
 import {
   productFormSchema,
   EMPTY_FORM,
   type ProductForm,
 } from "@/data/products/product.schema";
+
 import { ProductDrawer } from "@/components/product/ProductDrawer";
 import { ProductTable } from "@/components/product/ProductTable";
 import { useProductColumns } from "@/components/product/ProductTableColumns";
 import type { Product } from "@/api/product.api";
 
-const productSearchSchema = z.object({ q: z.string().optional() });
-
+const productSearchSchema = z.object({
+  q: z.string().catch(''),
+})
 export const Route = createFileRoute("/product/")({
   validateSearch: productSearchSchema,
+  loaderDeps: () => [{}],
   loader: async () => {
     await queryClient.ensureQueryData({
       queryKey: productKeys.list(),
@@ -52,18 +59,18 @@ function ProductList() {
   const createMut = useCreateProduct();
   const updateMut = useUpdateProduct();
   const deleteMut = useDeleteProduct();
+  const [pagination, setPagination] = React.useState({
+    pageIndex: 0,
+    pageSize: 10,
+  });
 
-  // Sheet state
+  // Drawer state
   const [open, setOpen] = React.useState(false);
   const [mode, setMode] = React.useState<"create" | "edit">("create");
   const [editing, setEditing] = React.useState<Product | null>(null);
   const [form, setForm] = React.useState<ProductForm>(EMPTY_FORM);
   const [formErrors, setFormErrors] = React.useState<FormErrors>({});
-  const [uiTableLoading, setUiTableLoading] = React.useState(false);
-  React.useEffect(() => {
-  const t = window.setTimeout(() => setUiTableLoading(false), 2000);
-  return () => window.clearTimeout(t);
-}, []);
+
   const openCreate = React.useCallback(() => {
     setMode("create");
     setEditing(null);
@@ -88,7 +95,7 @@ function ProductList() {
     setOpen(true);
   }, []);
 
-  const closeSheet = React.useCallback(() => {
+  const closeDrawer = React.useCallback(() => {
     setOpen(false);
   }, []);
 
@@ -121,7 +128,7 @@ function ProductList() {
           },
           {
             onSuccess: () => {
-              closeSheet();
+              closeDrawer();
               setForm(EMPTY_FORM);
               setFormErrors({});
             },
@@ -142,7 +149,7 @@ function ProductList() {
         },
         {
           onSuccess: () => {
-            closeSheet();
+            closeDrawer();
             setEditing(null);
             setForm(EMPTY_FORM);
             setFormErrors({});
@@ -150,16 +157,18 @@ function ProductList() {
         }
       );
     },
-    [closeSheet, createMut, editing, form, mode, updateMut]
+    [closeDrawer, createMut, editing, form, mode, updateMut]
   );
 
-  // search
   const q = (search.q ?? "").toLowerCase().trim();
   const filtered = q
     ? products.filter((p) => p.name.toLowerCase().includes(q))
     : products;
 
-  // columns (tách file)
+  React.useEffect(() => {
+    setPagination((p) => ({ ...p, pageIndex: 0 }));
+  }, [q]);
+
   const columns = useProductColumns({
     onEdit: openEdit,
     onDelete: (id) => deleteMut.mutate({ id }),
@@ -170,17 +179,24 @@ function ProductList() {
     data: filtered,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    onPaginationChange: setPagination,
+    state: { pagination },
   });
 
-  {uiTableLoading || isLoading ? (
-    <div className="mt-4 rounded-md border">
-      <div className="flex h-56 items-center justify-center">
-        <Spinner className="h-10 w-10 text-muted-foreground" />
+  const pageCount = table.getPageCount();
+
+  if (isLoading) {
+    return (
+      <div className="p-4">
+        <div className="rounded-md border">
+          <div className="flex h-56 items-center justify-center">
+            <span className="text-sm text-muted-foreground">Loading...</span>
+          </div>
+        </div>
       </div>
-    </div>
-  ) : (
-    <ProductTable table={table} />
-  )}
+    );
+  }
 
   if (isError) {
     return (
@@ -210,17 +226,34 @@ function ProductList() {
         </Button>
       </div>
 
-      <Input
-        placeholder="Search by name... (q)"
-        value={search.q ?? ""}
-        onChange={(e) =>
-          navigate({
-            search: (prev) => ({ ...prev, q: e.target.value }),
-            replace: true,
-          })
-        }
-        className="max-w-sm"
-      />
+      <div className="flex flex-wrap items-center gap-3">
+        <Input
+          placeholder="Search by name... (q)"
+          value={search.q ?? ""}
+          onChange={(e) =>
+            navigate({
+              search: (prev) => ({ ...prev, q: e.target.value }),
+              replace: true,
+            })
+          }
+          className="max-w-sm"
+        />
+
+        <select
+          className="h-10 rounded-md border bg-background px-3 text-sm"
+          value={pagination.pageSize}
+          onChange={(e) =>
+            setPagination({
+              pageIndex: 0,
+              pageSize: Number(e.target.value),
+            })
+          }
+        >
+          <option value={10}>10 / page</option>
+          <option value={20}>20 / page</option>
+          <option value={50}>50 / page</option>
+        </select>
+      </div>
 
       <MutationError
         show={createMut.isError}
@@ -237,7 +270,29 @@ function ProductList() {
 
       <ProductTable table={table} />
 
-      {filtered.length === 0 && <p>No products found.</p>}
+      <div className="mt-4 flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          Page {pagination.pageIndex + 1} / {pageCount} • Total{" "}
+          {filtered.length}
+        </p>
+
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => table.previousPage()}
+            disabled={!table.getCanPreviousPage()}
+          >
+            Prev
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => table.nextPage()}
+            disabled={!table.getCanNextPage()}
+          >
+            Next
+          </Button>
+        </div>
+      </div>
 
       <ProductDrawer
         open={open}
@@ -246,7 +301,7 @@ function ProductList() {
         setForm={setForm}
         formErrors={formErrors}
         onSubmit={onSubmit}
-        onCancel={closeSheet}
+        onCancel={closeDrawer}
         onOpenChange={(v) => {
           setOpen(v);
           if (!v) {
