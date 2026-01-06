@@ -1,6 +1,6 @@
 import { db } from '@/lib/database'
 import { products } from '../../drizzle/schema'
-import { eq, inArray} from 'drizzle-orm'
+import { eq, ilike, inArray, sql, asc } from 'drizzle-orm'
 import crypto from 'crypto'
 
 export type Product = {
@@ -13,9 +13,15 @@ export type Product = {
 
 export const productApi = {
 
-  // list all products
-  async list(): Promise<Product[]> {
-    return db.select().from(products)
+  // list all products pagination can be added later
+  async list(q?: string): Promise<Product[]> {
+    const qq = q?.trim()
+    if (!qq) return db.select().from(products)
+
+    return db
+      .select()
+      .from(products)
+      .where(ilike(products.name, `%${qq}%`))
   },
 
   // get a product by id
@@ -58,5 +64,30 @@ export const productApi = {
   // delete select multiple products by ids
   async removeMany(ids: string[]) {
     await db.delete(products).where(inArray(products.id, ids))
-  }
+  },
+  // list all products with pagination
+ 
+async listPaginated(args: {
+  q?: string
+  pageIndex: number
+  pageSize: number
+}): Promise<{ items: Product[]; total: number }> {
+  const { q, pageIndex, pageSize } = args
+  const qq = q?.trim()
+  const where = qq ? ilike(products.name, `%${qq}%`) : undefined
+
+  const countQuery = db.select({ count: sql<number>`count(*)` }).from(products)
+  if (where) countQuery.where(where)
+  const [{ count }] = await countQuery
+  const total = Number(count)
+
+  const itemsQuery = db.select().from(products)
+  if (where) itemsQuery.where(where)
+  const items = await itemsQuery
+    .orderBy(asc(products.name))
+    .limit(pageSize)
+    .offset(pageIndex * pageSize)
+
+  return { items, total }
+}
 }

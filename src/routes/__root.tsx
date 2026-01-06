@@ -1,15 +1,24 @@
 import React from "react";
-import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
+import {
+  HeadContent,
+  Scripts,
+  createRootRouteWithContext,
+} from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { TanStackDevtools } from "@tanstack/react-devtools";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import type { QueryClient } from "@tanstack/react-query";
+import { Toaster } from "@/components/ui/sonner";
 
 import Header from "../components/Header";
-import { queryClient } from "../lib/queryClient";
+import { Provider as TanstackQueryProvider } from "../integrations/tanstack-query/root-provider";
 import appCss from "../styles.css?url";
 
-export const Route = createRootRoute({
+interface MyRouterContext {
+  queryClient: QueryClient;
+}
+
+export const Route = createRootRouteWithContext<MyRouterContext>()({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -23,6 +32,8 @@ export const Route = createRootRoute({
 });
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const { queryClient } = Route.useRouteContext();
+
   return (
     <html lang="en">
       <head>
@@ -30,9 +41,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
 
       <body>
-        <QueryClientProvider client={queryClient}>
+        <TanstackQueryProvider queryClient={queryClient}>
           <Header />
           {children}
+          <Toaster richColors position="top-right" /> 
           <TanStackDevtools
             config={{ position: "bottom-right" }}
             plugins={[
@@ -42,12 +54,11 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               },
             ]}
           />
-
           <ReactQueryDevtools
             initialIsOpen={false}
             buttonPosition="bottom-left"
           />
-        </QueryClientProvider>
+        </TanstackQueryProvider>
 
         <Scripts />
       </body>

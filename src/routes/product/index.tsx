@@ -1,12 +1,12 @@
 import * as React from "react";
 import { z } from "zod";
-
 import { createFileRoute } from "@tanstack/react-router";
 import {
   getCoreRowModel,
-  getPaginationRowModel,
   useReactTable,
 } from "@tanstack/react-table";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
 
 import {
   productKeys,
@@ -16,21 +16,8 @@ import {
   useDeleteProduct,
   useDeleteManyProducts,
 } from "@/data/products.queries";
-import {
-  AlertDialog,
-  AlertDialogTrigger,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogCancel,
-  AlertDialogAction,
-} from "@/components/ui/alert-dialog";
 
-import { queryClient } from "@/lib/queryClient";
 import { listProducts } from "@/api/product.fn";
-
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { MutationError } from "@/components/common/MutationError";
@@ -46,16 +33,33 @@ import { ProductTable } from "@/components/product/ProductTable";
 import { useProductColumns } from "@/components/product/ProductTableColumns";
 import type { Product } from "@/api/product.api";
 import { ConfirmDialog } from "@/components/common/ConfirmDialog";
-const productSearchSchema = z.object({
-  q: z.string().catch(""),
-});
+
+const DEFAULT_IMAGE_URL = "https://picsum.photos/seed/new/300/180";
+const INITIAL_PAGINATION = { pageIndex: 0, pageSize: 10 };
+const productSearchSchema = z
+  .object({
+    q: z.string().optional(),
+  })
+  .catch({ q: undefined });
+
 export const Route = createFileRoute("/product/")({
   validateSearch: productSearchSchema,
-  loaderDeps: () => [{}],
-  loader: async () => {
-    await queryClient.ensureQueryData({
-      queryKey: productKeys.list(),
-      queryFn: () => listProducts(),
+  loaderDeps: ({ search }) => ({ q: (search.q ?? "").trim() }),
+  loader: async ({ context, deps }) => {
+    await context.queryClient.ensureQueryData({
+      queryKey: productKeys.list(
+        deps.q,
+        INITIAL_PAGINATION.pageIndex,
+        INITIAL_PAGINATION.pageSize
+      ),
+      queryFn: () =>
+        listProducts({
+          data: {
+            q: deps.q || undefined,
+            pageIndex: INITIAL_PAGINATION.pageIndex,
+            pageSize: INITIAL_PAGINATION.pageSize,
+          },
+        }),
     });
   },
   component: ProductList,
@@ -63,33 +67,101 @@ export const Route = createFileRoute("/product/")({
 
 type FormErrors = Partial<Record<keyof ProductForm, string>>;
 
+function useDebouncedValue<T>(value: T, delayMs: number) {
+  const [debounced, setDebounced] = React.useState<T>(value);
+
+  React.useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(t);
+  }, [value, delayMs]);
+
+  return debounced;
+}
+
 function ProductList() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  // data mutations
-  const { data: products = [], isLoading, isError, error } = useProducts();
+  const qc = useQueryClient();
+
+  const urlQ = (search.q ?? "").trim();
+
+  // Local input (for smooth typing) + debounced push to URL
+  const [searchText, setSearchText] = React.useState(search.q ?? "");
+  const debouncedSearchText = useDebouncedValue(searchText, 300);
+  const [pagination, setPagination] = React.useState(INITIAL_PAGINATION);
+  // Sync local input when user navigates via back/forward or external link
+  React.useEffect(() => {
+    setSearchText(search.q ?? "");
+  }, [search.q]);
+
+  // Push debounced input -> URL
+  React.useEffect(() => {
+    const nextQ = (debouncedSearchText ?? "").trim();
+    if (nextQ === urlQ) return;
+
+    navigate({
+      search: (prev) => ({
+        ...prev,
+        q: nextQ ? nextQ : undefined,
+      }),
+      replace: true,
+    });
+  }, [debouncedSearchText, navigate, urlQ]);
+
+  // Data
+
+  // Mutations
   const createMut = useCreateProduct();
   const updateMut = useUpdateProduct();
   const deleteMut = useDeleteProduct();
   const deleteManyMut = useDeleteManyProducts();
-  // pagination state
-  const [pagination, setPagination] = React.useState({
-    pageIndex: 0,
-    pageSize: 10,
-  });
-  // drawer state
+
+  // Pagination
+  const { data, isLoading, isError, error } = useProducts(
+    urlQ,
+    pagination.pageIndex,
+    pagination.pageSize
+  );
+
+  const products = data?.items ?? [];
+  const total = data?.total ?? 0;
+
+  const pageCount = Math.max(1, Math.ceil(total / pagination.pageSize));
+
+  const prefetchPage = React.useCallback(
+    (pageIndex: number) => {
+      if (pageIndex < 0 || pageIndex >= pageCount) return;
+
+      return qc.prefetchQuery({
+        queryKey: productKeys.list(urlQ, pageIndex, pagination.pageSize),
+        queryFn: () =>
+          listProducts({
+            data: {
+              q: urlQ || undefined,
+              pageIndex,
+              pageSize: pagination.pageSize,
+            },
+          }),
+        staleTime: 30_000,
+      });
+    },
+    [pageCount, pagination.pageSize, qc, urlQ]
+  );
+  // Drawer
   const [open, setOpen] = React.useState(false);
   const [mode, setMode] = React.useState<"create" | "edit">("create");
   const [editing, setEditing] = React.useState<Product | null>(null);
   const [form, setForm] = React.useState<ProductForm>(EMPTY_FORM);
   const [formErrors, setFormErrors] = React.useState<FormErrors>({});
-  // selection
-  const [rowSelection, setRowSelection] = React.useState({});
 
-  // comfirm dialog handlers
+  // Selection
+  const [rowSelection, setRowSelection] = React.useState<
+    Record<string, boolean>
+  >({});
+
+  // Confirm bulk delete
   const [confirmOpen, setConfirmOpen] = React.useState(false);
 
-  // drawer handlers
   const openCreate = React.useCallback(() => {
     setMode("create");
     setEditing(null);
@@ -97,11 +169,11 @@ function ProductList() {
     setForm({
       name: "",
       price: 0,
-      imageUrl: "https://picsum.photos/seed/new/300/180",
+      imageUrl: DEFAULT_IMAGE_URL,
     });
     setOpen(true);
   }, []);
-  // edit handler
+
   const openEdit = React.useCallback((p: Product) => {
     setMode("edit");
     setEditing(p);
@@ -113,11 +185,11 @@ function ProductList() {
     });
     setOpen(true);
   }, []);
-  // close handler
+
   const closeDrawer = React.useCallback(() => {
     setOpen(false);
   }, []);
-  // submit handler
+
   const onSubmit = React.useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
@@ -142,14 +214,19 @@ function ProductList() {
           {
             name: values.name,
             price: values.price || 0,
-            imageUrl:
-              values.imageUrl || "https://picsum.photos/seed/new/300/180",
+            imageUrl: values.imageUrl || DEFAULT_IMAGE_URL,
           },
           {
             onSuccess: () => {
+              toast.success("Created product successfully", {
+                description: `Product "${values.name}" has been created.`,
+              });
               closeDrawer();
               setForm(EMPTY_FORM);
               setFormErrors({});
+            },
+            onError: () => {
+              toast.error("Failed to create product");
             },
           }
         );
@@ -157,6 +234,7 @@ function ProductList() {
       }
 
       if (!editing) return;
+
       updateMut.mutate(
         {
           id: editing.id,
@@ -168,10 +246,16 @@ function ProductList() {
         },
         {
           onSuccess: () => {
+            toast.success("Updated product successfully", {
+              description: `Product "${values.name}" has been updated.`,
+            });
             closeDrawer();
             setEditing(null);
             setForm(EMPTY_FORM);
             setFormErrors({});
+          },
+          onError: () => {
+            toast.error("Failed to update product");
           },
         }
       );
@@ -179,38 +263,58 @@ function ProductList() {
     [closeDrawer, createMut, editing, form, mode, updateMut]
   );
 
-  const q = (search.q ?? "").toLowerCase().trim();
-  const filtered = q
-    ? products.filter((p) => p.name.toLowerCase().includes(q))
-    : products;
-
+  // Reset paging + selection when query changes
   React.useEffect(() => {
     setPagination((p) => ({ ...p, pageIndex: 0 }));
-  }, [q]);
+    setRowSelection({});
+    setConfirmOpen(false);
+  }, [urlQ]);
+
+  const handleDeleteOne = React.useCallback(
+    (id: string) => {
+      const found = products.find((p) => p.id === id);
+      deleteMut.mutate(
+        { id },
+        {
+          onSuccess: () => {
+            toast.success("Deleted product successfully", {
+              description: found
+                ? `Product "${found.name}" has been deleted.`
+                : undefined,
+            });
+          },
+          onError: () => {
+            toast.error("Failed to delete product");
+          },
+        }
+      );
+    },
+    [deleteMut, products]
+  );
 
   const columns = useProductColumns({
     onEdit: openEdit,
-    onDelete: (id) => deleteMut.mutate({ id }),
+    onDelete: handleDeleteOne,
     deletePending: deleteMut.isPending,
   });
 
   const table = useReactTable({
-    data: filtered,
+    data: products,
     columns,
+    getRowId: (row) => row.id,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount,
     onPaginationChange: setPagination,
     enableRowSelection: true,
     onRowSelectionChange: setRowSelection,
     state: { pagination, rowSelection },
   });
 
-  const pageCount = table.getPageCount();
-  // delected ids
-  const selectedIds = React.useMemo(
-    () => table.getSelectedRowModel().rows.map((r) => r.original.id),
-    [rowSelection, table]
-  );
+
+  const selectedIds = React.useMemo(() => {
+    return table.getSelectedRowModel().rows.map((r) => r.original.id);
+  }, [rowSelection]);
 
   const handleConfirmDelete = React.useCallback(() => {
     if (selectedIds.length === 0) return;
@@ -219,12 +323,19 @@ function ProductList() {
       { ids: selectedIds },
       {
         onSuccess: () => {
+          toast.success("Deleted products successfully", {
+            description: `Deleted ${selectedIds.length} product(s).`,
+          });
           table.resetRowSelection();
           setConfirmOpen(false);
+        },
+        onError: () => {
+          toast.error("Failed to delete selected products");
         },
       }
     );
   }, [deleteManyMut, selectedIds, table]);
+
   if (isLoading) {
     return (
       <div className="p-4">
@@ -239,23 +350,17 @@ function ProductList() {
 
   if (isError) {
     return (
-      <div style={{ padding: 16, color: "red" }}>
+      <div className="p-4 text-red-600">
         Failed to load products: {(error as Error).message}
       </div>
     );
   }
 
   return (
-    <div style={{ padding: 16 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          marginBottom: 12,
-        }}
-      >
-        <h1 style={{ margin: 0 }}>Product List</h1>
+    <div className="p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <h1 className="mr-2 text-xl font-semibold">Product List</h1>
+
         <Button
           type="button"
           onClick={openCreate}
@@ -263,6 +368,7 @@ function ProductList() {
         >
           Add Product
         </Button>
+
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
@@ -289,16 +395,11 @@ function ProductList() {
         />
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
         <Input
           placeholder="Search by name... (q)"
-          value={search.q ?? ""}
-          onChange={(e) =>
-            navigate({
-              search: (prev) => ({ ...prev, q: e.target.value }),
-              replace: true,
-            })
-          }
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
           className="max-w-sm"
         />
 
@@ -330,23 +431,25 @@ function ProductList() {
         show={deleteMut.isError}
         message="Failed to delete product"
       />
-
       <MutationError
         show={deleteManyMut.isError}
         message="Failed to delete selected products"
       />
+
       <ProductTable table={table} />
 
       <div className="mt-4 flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          Page {pagination.pageIndex + 1} / {pageCount} • Total{" "}
-          {filtered.length}
+          Page {pagination.pageIndex + 1} / {pageCount} • Total {total}{" "}
+          {products.length}
         </p>
 
         <div className="flex gap-2">
           <Button
             variant="outline"
             onClick={() => table.previousPage()}
+            onMouseEnter={() => prefetchPage(pagination.pageIndex - 1)}
+            onFocus={() => prefetchPage(pagination.pageIndex - 1)}
             disabled={!table.getCanPreviousPage()}
           >
             Prev
@@ -354,6 +457,8 @@ function ProductList() {
           <Button
             variant="outline"
             onClick={() => table.nextPage()}
+            onMouseEnter={() => prefetchPage(pagination.pageIndex + 1)}
+            onFocus={() => prefetchPage(pagination.pageIndex + 1)}
             disabled={!table.getCanNextPage()}
           >
             Next

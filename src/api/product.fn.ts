@@ -3,8 +3,21 @@ import { z } from "zod";
 import { productApi } from "./product.api";
 
 // LIST
-export const listProducts = createServerFn().handler(() => productApi.list());
-
+export const listProducts = createServerFn()
+  .inputValidator(
+    z.object({
+      q: z.string().optional(),
+      pageIndex: z.number().int().min(0),
+      pageSize: z.number().int().min(1).max(100),
+    })
+  )
+  .handler(({ data }) =>
+    productApi.listPaginated({
+      q: data.q,
+      pageIndex: data.pageIndex,
+      pageSize: data.pageSize,
+    })
+  )
 // GET BY ID
 export const getProductById = createServerFn()
   .inputValidator(z.object({ id: z.string().min(1) }))

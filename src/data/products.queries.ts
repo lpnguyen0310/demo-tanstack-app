@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import type { Product } from "../api/product.api";
 import {
@@ -12,23 +17,32 @@ import {
 
 export const productKeys = {
   all: ["products"] as const,
-  list: () => [...productKeys.all, "list"] as const,
+  list: (q: string, pageIndex: number, pageSize: number) =>
+    [...productKeys.all, "list", q, pageIndex, pageSize] as const,
   detail: (id: string) => [...productKeys.all, "detail", id] as const,
 };
 
-export function useProducts() {
+export function useProducts(q: string, pageIndex: number, pageSize: number) {
   const fn = useServerFn(listProducts);
   return useQuery({
-    queryKey: productKeys.list(),
-    queryFn: () => fn(),
+    queryKey: productKeys.list(q, pageIndex, pageSize),
+    queryFn: () =>
+      fn({
+        data: {
+          q: q ? q : undefined,
+          pageIndex,
+          pageSize,
+        },
+      }),
     staleTime: 30_000,
+    placeholderData: keepPreviousData,
   });
 }
 
 export function useProduct(id: string) {
   const fn = useServerFn(getProductById);
   return useQuery({
-    queryKey: productKeys.detail(id),                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+    queryKey: productKeys.detail(id),
     queryFn: async () => {
       const p = await fn({ data: { id } });
       if (!p) throw new Error("Product not found");
@@ -54,7 +68,7 @@ export function useUpdateProduct() {
     mutationFn: (input: { id: string; patch: Partial<Omit<Product, "id">> }) =>
       fn({ data: input }),
     onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: productKeys.list() });
+      qc.invalidateQueries({ queryKey: productKeys.all });
       qc.invalidateQueries({ queryKey: productKeys.detail(v.id) });
     },
   });
