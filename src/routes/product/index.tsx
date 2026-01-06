@@ -14,7 +14,19 @@ import {
   useCreateProduct,
   useUpdateProduct,
   useDeleteProduct,
+  useDeleteManyProducts,
 } from "@/data/products.queries";
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 
 import { queryClient } from "@/lib/queryClient";
 import { listProducts } from "@/api/product.fn";
@@ -33,10 +45,10 @@ import { ProductDrawer } from "@/components/product/ProductDrawer";
 import { ProductTable } from "@/components/product/ProductTable";
 import { useProductColumns } from "@/components/product/ProductTableColumns";
 import type { Product } from "@/api/product.api";
-
+import { ConfirmDialog } from "@/components/common/ConfirmDialog";
 const productSearchSchema = z.object({
-  q: z.string().catch(''),
-})
+  q: z.string().catch(""),
+});
 export const Route = createFileRoute("/product/")({
   validateSearch: productSearchSchema,
   loaderDeps: () => [{}],
@@ -54,23 +66,30 @@ type FormErrors = Partial<Record<keyof ProductForm, string>>;
 function ProductList() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-
+  // data mutations
   const { data: products = [], isLoading, isError, error } = useProducts();
   const createMut = useCreateProduct();
   const updateMut = useUpdateProduct();
   const deleteMut = useDeleteProduct();
+  const deleteManyMut = useDeleteManyProducts();
+  // pagination state
   const [pagination, setPagination] = React.useState({
     pageIndex: 0,
     pageSize: 10,
   });
-
-  // Drawer state
+  // drawer state
   const [open, setOpen] = React.useState(false);
   const [mode, setMode] = React.useState<"create" | "edit">("create");
   const [editing, setEditing] = React.useState<Product | null>(null);
   const [form, setForm] = React.useState<ProductForm>(EMPTY_FORM);
   const [formErrors, setFormErrors] = React.useState<FormErrors>({});
+  // selection
+  const [rowSelection, setRowSelection] = React.useState({});
 
+  // comfirm dialog handlers
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+
+  // drawer handlers
   const openCreate = React.useCallback(() => {
     setMode("create");
     setEditing(null);
@@ -82,7 +101,7 @@ function ProductList() {
     });
     setOpen(true);
   }, []);
-
+  // edit handler
   const openEdit = React.useCallback((p: Product) => {
     setMode("edit");
     setEditing(p);
@@ -94,11 +113,11 @@ function ProductList() {
     });
     setOpen(true);
   }, []);
-
+  // close handler
   const closeDrawer = React.useCallback(() => {
     setOpen(false);
   }, []);
-
+  // submit handler
   const onSubmit = React.useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
@@ -181,11 +200,31 @@ function ProductList() {
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     onPaginationChange: setPagination,
-    state: { pagination },
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
+    state: { pagination, rowSelection },
   });
 
   const pageCount = table.getPageCount();
+  // delected ids
+  const selectedIds = React.useMemo(
+    () => table.getSelectedRowModel().rows.map((r) => r.original.id),
+    [rowSelection, table]
+  );
 
+  const handleConfirmDelete = React.useCallback(() => {
+    if (selectedIds.length === 0) return;
+
+    deleteManyMut.mutate(
+      { ids: selectedIds },
+      {
+        onSuccess: () => {
+          table.resetRowSelection();
+          setConfirmOpen(false);
+        },
+      }
+    );
+  }, [deleteManyMut, selectedIds, table]);
   if (isLoading) {
     return (
       <div className="p-4">
@@ -224,6 +263,30 @@ function ProductList() {
         >
           Add Product
         </Button>
+        <ConfirmDialog
+          open={confirmOpen}
+          onOpenChange={setConfirmOpen}
+          variant="destructive"
+          title="Confirm deletion"
+          description={
+            <>
+              You are about to permanently delete{" "}
+              <strong>{selectedIds.length}</strong> product(s). This action
+              cannot be undone.
+            </>
+          }
+          trigger={
+            <Button variant="destructive" disabled={selectedIds.length === 0}>
+              Delete Selected ({selectedIds.length})
+            </Button>
+          }
+          confirmText={
+            deleteManyMut.isPending ? "Deleting..." : "Confirm delete"
+          }
+          cancelDisabled={deleteManyMut.isPending}
+          confirmDisabled={deleteManyMut.isPending}
+          onConfirm={handleConfirmDelete}
+        />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -268,6 +331,10 @@ function ProductList() {
         message="Failed to delete product"
       />
 
+      <MutationError
+        show={deleteManyMut.isError}
+        message="Failed to delete selected products"
+      />
       <ProductTable table={table} />
 
       <div className="mt-4 flex items-center justify-between">

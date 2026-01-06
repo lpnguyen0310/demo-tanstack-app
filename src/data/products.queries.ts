@@ -7,6 +7,7 @@ import {
   createProduct,
   updateProduct,
   deleteProduct,
+  deleteManyProducts,
 } from "@/api/product.fn";
 
 export const productKeys = {
@@ -27,7 +28,7 @@ export function useProducts() {
 export function useProduct(id: string) {
   const fn = useServerFn(getProductById);
   return useQuery({
-    queryKey: productKeys.detail(id),
+    queryKey: productKeys.detail(id),                                                                                                                                                                                                                                                                                                                                                                                                                                                         
     queryFn: async () => {
       const p = await fn({ data: { id } });
       if (!p) throw new Error("Product not found");
@@ -64,6 +65,15 @@ export function useDeleteProduct() {
   const fn = useServerFn(deleteProduct);
   return useMutation({
     mutationFn: (input: { id: string }) => fn({ data: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: productKeys.all }),
+  });
+}
+
+export function useDeleteManyProducts() {
+  const qc = useQueryClient();
+  const fn = useServerFn(deleteManyProducts);
+  return useMutation({
+    mutationFn: (input: { ids: string[] }) => fn({ data: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: productKeys.all }),
   });
 }

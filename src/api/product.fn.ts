@@ -40,3 +40,8 @@ export const updateProduct = createServerFn({ method: "POST" })
 export const deleteProduct = createServerFn({ method: "POST" })
   .inputValidator(z.object({ id: z.string().min(1) }))
   .handler(({ data }) => productApi.remove(data.id));
+
+// DELETE MANY
+export const deleteManyProducts = createServerFn({ method: "POST" })
+  .inputValidator(z.object({ ids: z.array(z.string().min(1)) }))
+  .handler(({ data }) => productApi.removeMany(data.ids));

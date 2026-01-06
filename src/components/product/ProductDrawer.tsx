@@ -49,7 +49,7 @@ export function ProductDrawer({
       <DrawerContent
         className="
           fixed right-0 top-0 bottom-0
-          w-[450px] sm:w-[540px]
+          w-[450px] sm:w-[540px]  
           rounded-none
           border-l
           bg-white dark:bg-gray-800

@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import type { Product } from "@/api/product.api";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Checkbox} from "@/components/ui/checkbox";
 
 const columnHelper = createColumnHelper<Product>();
 const imageShownCache = new Map<string, boolean>();
@@ -65,6 +66,26 @@ export function useProductColumns({
 }: UseProductColumnsArgs) {
   return React.useMemo<ColumnDef<Product, unknown>[]>(() => {
     return [
+      columnHelper.display({
+        id: "select",
+        header: ({ table }) => (
+          <Checkbox
+            checked={table.getIsAllPageRowsSelected()}
+            onCheckedChange={(value) =>
+              table.toggleAllPageRowsSelected(!!value)
+            }
+            aria-label="Select all"
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            aria-label="Select row"
+          />
+        ),
+      }),
+
       columnHelper.display({
         id: "image",
         header: "Image",
